@@ -1,0 +1,171 @@
+version: 2.1
+
+functions:
+  setup-python: github.com/circleci-functions/setup-python@v0.5.0
+  setup-github-cli: github.com/circleci-functions/setup-github-cli@v0.3.0
+
+orbs:
+  rust: circleci/rust@2.0.0
+  windows: circleci/windows@5.1.1
+
+jobs:
+  build-linux:
+    docker:
+      # No published Rust function; use the current stable Rust minor release.
+      - image: cimg/rust:1.100
+    environment:
+      CARGO_TERM_COLOR: never
+      RUSTFLAGS: "-L native=/usr/local/lib"
+    steps:
+      - checkout
+      # The JUnit adapter uses only the standard library of the image's Python.
+      - setup-python
+      - run:
+          name: Build the OpenCL loader with the image's CMake and C compiler
+          command: |
+            git clone --depth 1 --branch v2026.05.29 https://github.com/KhronosGroup/OpenCL-Headers.git /tmp/opencl-headers
+            git clone --depth 1 --branch v2026.05.29 https://github.com/KhronosGroup/OpenCL-ICD-Loader.git /tmp/opencl-loader
+            cmake -S /tmp/opencl-loader -B /tmp/opencl-build \
+              -DOPENCL_ICD_LOADER_HEADERS_DIR=/tmp/opencl-headers \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_TESTING=OFF \
+              -DENABLE_OPENCL_LAYERS=OFF \
+              -DCMAKE_INSTALL_PREFIX=/usr/local \
+              -DCMAKE_INSTALL_LIBDIR=lib
+            cmake --build /tmp/opencl-build --parallel 2
+            sudo cmake --install /tmp/opencl-build
+            sudo ldconfig
+      - restore_cache:
+          keys:
+            - cargo-v1-{{ arch }}-rust-1.100-{{ checksum "Cargo.lock" }}
+      - run:
+          name: Fetch locked Cargo dependencies
+          command: cargo fetch --locked
+      - save_cache:
+          key: cargo-v1-{{ arch }}-rust-1.100-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+      - run:
+          name: Build release binary
+          command: cargo build --release --locked
+      - run:
+          name: Smoke test and package Linux binary
+          command: |
+            target/release/opencl_vanity_gpg --help
+            python3 .circleci/package-binary.py
+      - store_artifacts:
+          path: target/artifacts
+          destination: binaries
+      - persist_to_workspace:
+          root: target
+          paths:
+            - artifacts/*
+      - run:
+          name: Run Rust unit tests
+          command: circleci testsuite run "Rust unit tests"
+      - run:
+          name: Run CLI integration tests
+          command: circleci testsuite run "CLI integration tests"
+      - store_test_results:
+          path: target/test-results
+
+  build-macos:
+    macos:
+      xcode: "27.1.0"
+    resource_class: m4pro.medium
+    environment:
+      CARGO_TERM_COLOR: never
+    steps:
+      - checkout
+      - rust/install:
+          version: "1.100.0"
+      - setup-python
+      - restore_cache:
+          keys:
+            - cargo-v1-{{ arch }}-rust-1.100-{{ checksum "Cargo.lock" }}
+      - run: cargo fetch --locked
+      - save_cache:
+          key: cargo-v1-{{ arch }}-rust-1.100-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+      - run:
+          name: Build release binary using the system OpenCL framework
+          command: cargo build --release --locked
+      - run:
+          name: Smoke test and package macOS binary
+          command: |
+            target/release/opencl_vanity_gpg --help
+            python3 .circleci/package-binary.py
+      - store_artifacts:
+          path: target/artifacts
+          destination: binaries
+      - persist_to_workspace:
+          root: target
+          paths:
+            - artifacts/*
+
+  build-windows:
+    executor:
+      name: windows/server-2022
+      size: medium
+      shell: powershell.exe -ExecutionPolicy Bypass
+    environment:
+      CARGO_TERM_COLOR: never
+    steps:
+      - checkout
+      - setup-python
+      - restore_cache:
+          keys:
+            - cargo-v1-{{ arch }}-rust-1.100-{{ checksum "Cargo.lock" }}
+      - run:
+          name: Build, smoke test, and package Windows binary
+          command: .\.circleci\build-windows.ps1
+      - save_cache:
+          key: cargo-v1-{{ arch }}-rust-1.100-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+      - store_artifacts:
+          path: target/artifacts
+          destination: binaries
+      - persist_to_workspace:
+          root: target
+          paths:
+            - artifacts/*
+
+  publish-release:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/release
+      - setup-github-cli
+      - run:
+          name: Publish all platform packages to GitHub Releases
+          command: bash .circleci/publish-release.sh /tmp/release/artifacts
+
+workflows:
+  main:
+    jobs:
+      - build-linux:
+          filters:
+            tags:
+              only: /^v[0-9].*/
+      - build-macos:
+          filters:
+            tags:
+              only: /^v[0-9].*/
+      - build-windows:
+          filters:
+            tags:
+              only: /^v[0-9].*/
+      - publish-release:
+          requires:
+            - build-linux
+            - build-macos
+            - build-windows
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9].*/

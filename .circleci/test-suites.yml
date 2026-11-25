@@ -1,0 +1,11 @@
+name: Rust unit tests
+discover: python3 .circleci/cargo-tests.py discover src
+run: python3 .circleci/cargo-tests.py run "<< outputs.junit >>" << test.atoms >>
+outputs:
+  junit: target/test-results/unit.xml
+---
+name: CLI integration tests
+discover: python3 .circleci/cargo-tests.py discover tests
+run: python3 .circleci/cargo-tests.py run "<< outputs.junit >>" << test.atoms >>
+outputs:
+  junit: target/test-results/cli.xml
