@@ -5,22 +5,19 @@
 #define CHUNK (0)
 #define FILTER(h) (false)
 #define FUTURE_MODE (0)
+#define COLLECT_ALL (0)
 #endif
 
-__kernel void vanity_sha1(__constant uint *hashdata, __global uint *result, const ulong iter, const uint max_time_range) {
+__kernel void vanity_sha1(__constant uint *hashdata, __global uint *result,
+                          const ulong offset_start, const ulong offset_count,
+                          const uint result_capacity) {
     uint data[CHUNK * 16];
     for (uint i = 0; i < CHUNK * 16; i++) data[i] = hashdata[i];
     uint nonce = data[1];
 
-    uint thread_id = get_global_id(0);
-
-    for (uint i = 0; i < iter; i++) {
-        // Use a simple sequential approach that searches close to base time first
-        // Each thread gets a small sequential offset
-        uint offset = thread_id + i * get_global_size(0);
-
-        // Avoid going too far (within max_time_range)
-        if (max_time_range && offset > max_time_range) break;
+    for (ulong index = get_global_id(0); index < offset_count; index += get_global_size(0)) {
+        ulong offset = offset_start + index;
+        if (offset > 0xFFFFFFFFUL) break;
 
         if (FUTURE_MODE) {
             // For future mode: increment timestamp within range
@@ -82,8 +79,13 @@ __kernel void vanity_sha1(__constant uint *hashdata, __global uint *result, cons
         }
 
         if (FILTER(h)) {
-            *result = data[1];
+            #if COLLECT_ALL
+            uint slot = atomic_inc(result);
+            if (slot < result_capacity) result[slot + 1] = data[1];
+            #else
+            if (atomic_cmpxchg(result, 0u, 1u) == 0u) result[1] = data[1];
             break;
+            #endif
         }
     }
 }

@@ -1,6 +1,7 @@
 mod args;
 mod device;
 mod pattern;
+mod search;
 mod vanity_key;
 
 use std::{fmt::Write, mem};
@@ -10,6 +11,7 @@ pub use device::DeviceList;
 use indicatif::*;
 use indicatif_log_bridge::LogWrapper;
 pub use pattern::HashPattern;
+pub use search::{search_size, shader_source, OpenClSearch};
 pub use vanity_key::VanitySecretKey;
 
 /// Do SHA-1 padding manually

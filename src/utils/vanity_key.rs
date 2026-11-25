@@ -230,17 +230,15 @@ impl VanitySecretKey {
     }
 
     pub fn check_pattern(&self, pattern: &HashPattern) -> bool {
-        if pattern.is_match(self.secret_key.fingerprint().as_bytes()) {
-            return true;
-        }
-
-        for subkey in &self.secret_key.secret_subkeys {
-            if pattern.is_match(subkey.fingerprint().as_bytes()) {
-                return true;
+        match self.cipher_suite {
+            CipherSuite::Cv25519
+            | CipherSuite::EcdhP256
+            | CipherSuite::EcdhP384
+            | CipherSuite::EcdhP521 => {
+                pattern.is_match(self.secret_key.secret_subkeys[0].fingerprint().as_bytes())
             }
+            _ => pattern.is_match(self.secret_key.fingerprint().as_bytes()),
         }
-
-        false
     }
 
     pub fn log_state(&self) {

@@ -10,6 +10,22 @@ pub struct HashPattern {
 }
 
 impl HashPattern {
+    pub fn shorter_suffix(source: &str, count: usize) -> anyhow::Result<Self> {
+        let normalized = source.trim().replace(' ', "").to_ascii_uppercase();
+        // Validate the original pattern before deriving a shorter one.
+        Self::from_str(&normalized)?;
+        let length = normalized.chars().count();
+        if count >= length {
+            bail!("--save-shorter must be less than the pattern length ({length})");
+        }
+        let suffix: String = normalized.chars().skip(count).collect();
+        let shorter = Self::from_str(&suffix)?;
+        if shorter.possibliity <= 1.0 {
+            bail!("--save-shorter leaves an unconstrained pattern; keep a fixed hex digit or at least two occurrences of a wildcard");
+        }
+        Ok(shorter)
+    }
+
     pub fn is_match(&self, hash: &[u8]) -> bool {
         if hash.len() != 20 {
             return false;
@@ -43,7 +59,7 @@ impl FromStr for HashPattern {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let pattern = match s.trim().replace(' ', "").to_ascii_uppercase() {
-            x if x.len() <= 40 => "*".repeat(40 - x.len()) + &x,
+            x if x.chars().count() <= 40 => "*".repeat(40 - x.chars().count()) + &x,
             _ => bail!("Invalid pattern: {}", s),
         };
 
@@ -120,5 +136,54 @@ impl FromStr for HashPattern {
             filter,
             possibliity: (16f64).powi((fixed_pos_count + wildcard_pos_count) as i32),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fingerprint(suffix: &str) -> Vec<u8> {
+        hex::decode(format!("{:0>40}", suffix)).unwrap()
+    }
+
+    #[test]
+    fn shorter_matches_include_original_and_intermediate_lengths() {
+        let original: HashPattern = "XXXXXX".parse().unwrap();
+        let shorter = HashPattern::shorter_suffix(" xx xx xx ", 1).unwrap();
+        assert!(shorter.is_match(&fingerprint("A77777")));
+        assert!(!original.is_match(&fingerprint("A77777")));
+        assert!(shorter.is_match(&fingerprint("777777")));
+        assert!(original.is_match(&fingerprint("777777")));
+        assert!(!shorter.is_match(&fingerprint("AA7777")));
+        let shorter_two = HashPattern::shorter_suffix("XXXXXX", 2).unwrap();
+        for suffix in ["AA7777", "A77777", "777777"] {
+            assert!(shorter_two.is_match(&fingerprint(suffix)));
+        }
+    }
+
+    #[test]
+    fn shorter_keeps_suffix_alignment_and_wildcard_groups() {
+        let shorter = HashPattern::shorter_suffix("12XXYY**", 2).unwrap();
+        assert!(shorter.is_match(&fingerprint("ABCCDD12")));
+        assert!(!shorter.is_match(&fingerprint("ABCDDD12")));
+        let fixed = HashPattern::shorter_suffix("123456", 1).unwrap();
+        assert!(fixed.is_match(&fingerprint("A23456")));
+        assert!(!fixed.is_match(&fingerprint("123450")));
+        let placeholder = HashPattern::shorter_suffix("X★XXX", 1).unwrap();
+        assert!(placeholder.is_match(&fingerprint("A777")));
+    }
+
+    #[test]
+    fn rejects_empty_or_unconstrained_suffixes() {
+        for (source, count) in [
+            ("XXXXXX", 6),
+            ("XXXXXX", 7),
+            ("XXXXXX", 5),
+            ("AB**", 2),
+            ("", 1),
+        ] {
+            assert!(HashPattern::shorter_suffix(source, count).is_err());
+        }
     }
 }

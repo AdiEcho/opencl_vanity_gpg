@@ -48,6 +48,11 @@ Options:
           > Example:
           * 11XXXX** may output a fingerprint ends with 11222234 or 11AAAABF
           * 11XXYYZZ may output a fingerprint ends with 11223344 or 11AABBCC
+      --save-shorter <COUNT>
+          Also save matches after removing COUNT leading characters from the pattern
+          Example: --pattern XXXXXX --save-shorter 1 also saves XXXXX matches
+          Requires --pattern; cannot be combined with --filter
+          --oneshot still waits for the original pattern [default: 0]
   -f, --filter <FILTER>
           OpenCL kernel function for uint h[5] for matching fingerprints
           Ignore the pattern and no estimate is given if this has been set
@@ -65,7 +70,7 @@ Options:
       --timeout <TIMEOUT>
           Exit after a specified time in seconds
       --oneshot
-          Exit after getting a vanity key
+          Exit after matching the original pattern (shorter matches do not stop the search)
       --no-progress
           Don't print progress
       --no-secret-key-logging
@@ -118,6 +123,24 @@ xsCkD3wdoVaA7t/BAQCvPyuVmtJN4M8gsYNRZYEfLwb1BIckohZv+svENGSqAw==
 ```
 
 一个 Curve25519 的密钥由用来签名和认证的 Ed25519 主密钥和用来加密的 Cv25519 子密钥组成。VanityGPG [只能生成主密钥为“靓号”的密钥](https://github.com/RedL0tus/VanityGPG/issues/5)，而这个项目也可以生成子密钥为“靓号”的密钥（只需要添加参数 `-c cv25519` 即可）。对于其他 NISP P-\*\*\* 的椭圆曲线的密钥也是类似的。
+
+使用 `--save-shorter <COUNT>` 可以在搜索原始目标时，同时保存较短的尾部匹配：
+
+```console
+cargo run --release -- --pattern XXXXXX --save-shorter 1 --output ./keys --oneshot
+```
+
+此例搜索末尾 6 位相同的指纹，同时将末尾 5 位相同的结果保存到 `./keys`。`--oneshot` 只在命中原始 6 位目标后退出，并保存当前批次中的所有匹配。主密钥和子密钥模式均支持此参数。
+
+- 默认值为 `0`，只搜索原始模式。
+- `COUNT` 表示从原模式左侧移除的字符数，保留右侧的尾部匹配。例如 `XXXXXX` 配合 `--save-shorter 2`，会保存至少 4 位相同的结果，包括 4、5、6 位及更长的连号；`123456` 配合 `--save-shorter 1`，会保存以 `23456` 结尾的结果。
+- 空格和大小写按原模式规则处理；`*` 等占位字符也计入移除数量。`COUNT` 必须小于模式长度，缩短后至少保留一个固定十六进制字符，或至少两个相同的通配字符，避免匹配所有指纹。
+- 此参数需要 `--pattern`，不能与 `--filter` 同时使用。指定 `--output` 才会写入文件；未指定时沿用原来的日志输出方式。
+- 长、短匹配均以主密钥指纹命名为 `<FINGERPRINT>-sec.asc`。同一个结果只保存一次，短匹配不会重置原始目标的进度。
+
+模式越短，命中结果越多，密钥重新签名和写入文件的开销也越大。GPU 会收集当前批次的全部匹配，缓冲区满时拆分重算以避免漏存。
+
+基础测试使用 `cargo test --locked`；有 OpenCL 设备时，使用 `cargo test --locked -- --include-ignored --test-threads=1` 同时验证 GPU 匹配结果、缓冲区溢出重试和生成密钥文件的签名。
 
 # 性能对比
 

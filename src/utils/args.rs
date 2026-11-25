@@ -1,11 +1,9 @@
 use clap::{Parser, ValueEnum};
 use std::sync::LazyLock;
 
-pub static ARGS: LazyLock<Args> = LazyLock::new(if cfg!(debug_assertions) {
-    Args::default
-} else {
-    Args::parse
-});
+use super::HashPattern;
+
+pub static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -31,6 +29,20 @@ pub struct Args {
     /// * 11XXYYZZ may output a fingerprint ends with 11223344 or 11AABBCC
     #[arg(short, long, verbatim_doc_comment)]
     pub pattern: Option<String>,
+
+    /// Also save matches after removing COUNT leading characters from the pattern
+    /// Example: --pattern XXXXXX --save-shorter 1 also saves XXXXX matches
+    /// Requires --pattern; cannot be combined with --filter
+    /// --oneshot still waits for the original pattern
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 0,
+        requires = "pattern",
+        conflicts_with = "filter",
+        verbatim_doc_comment
+    )]
+    pub save_shorter: usize,
 
     /// OpenCL kernel function for uint h[5] for matching fingerprints
     /// Ignore the pattern and no estimate is given if this has been set
@@ -60,7 +72,7 @@ pub struct Args {
     #[arg(long)]
     pub timeout: Option<f64>,
 
-    /// Exit after getting a vanity key
+    /// Exit after matching the original pattern (shorter matches do not stop the search)
     #[arg(long, default_value_t = false)]
     pub oneshot: bool,
 
@@ -96,26 +108,19 @@ pub struct Args {
     pub max_time_range: Option<u32>,
 }
 
-impl Default for Args {
-    fn default() -> Self {
-        Self {
-            cipher_suite: CipherSuite::Ed25519,
-            user_id: String::from("Dummy <dummy@example.com>"),
-            pattern: Some(String::from("XXXYYYZZZWWW")),
-            filter: None,
-            output: None,
-            device: None,
-            thread: None,
-            iteration: 512,
-            timeout: None,
-            oneshot: true,
-            no_progress: true,
-            no_secret_key_logging: false,
-            list_device: false,
-            future_timestamp: false,
-            start_timestamp: None,
-            max_time_range: None,
-        }
+impl Args {
+    pub fn patterns(&self) -> anyhow::Result<(Option<HashPattern>, Option<HashPattern>)> {
+        let pattern = self.pattern.as_deref().map(str::parse).transpose()?;
+        let shorter = if self.save_shorter > 0 {
+            let source = self
+                .pattern
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("--save-shorter requires --pattern"))?;
+            Some(HashPattern::shorter_suffix(source, self.save_shorter)?)
+        } else {
+            None
+        };
+        Ok((pattern, shorter))
     }
 }
 
@@ -135,4 +140,48 @@ pub enum CipherSuite {
     EcdsaP256,
     EcdsaP384,
     EcdsaP521,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_shorter_arguments() {
+        let args =
+            Args::try_parse_from(["vanity", "--pattern", "XXXXXX", "--save-shorter", "1"]).unwrap();
+        assert_eq!(args.save_shorter, 1);
+        assert!(args
+            .patterns()
+            .unwrap()
+            .1
+            .unwrap()
+            .pattern
+            .ends_with("*XXXXX"));
+        let defaults = Args::try_parse_from(["vanity", "--pattern", "XXXXXX"]).unwrap();
+        assert!(defaults.patterns().unwrap().1.is_none());
+        assert!(Args::try_parse_from(["vanity", "--filter", "true"]).is_ok());
+        assert!(Args::try_parse_from(["vanity", "--list-device"]).is_ok());
+        assert!(Args::try_parse_from(["vanity", "--save-shorter", "1"]).is_err());
+        assert!(Args::try_parse_from([
+            "vanity",
+            "--pattern",
+            "XXXXXX",
+            "--save-shorter",
+            "1",
+            "--filter",
+            "true"
+        ])
+        .is_err());
+        assert!(
+            Args::try_parse_from(["vanity", "--pattern", "XXXXXX", "--save-shorter", "-1"])
+                .is_err()
+        );
+        assert!(
+            Args::try_parse_from(["vanity", "--pattern", "XXXXXX", "--save-shorter", "6"])
+                .unwrap()
+                .patterns()
+                .is_err()
+        );
+    }
 }
