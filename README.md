@@ -127,7 +127,7 @@ xsCkD3wdoVaA7t/BAQCvPyuVmtJN4M8gsYNRZYEfLwb1BIckohZv+svENGSqAw==
 使用 `--save-shorter <COUNT>` 可以在搜索原始目标时，同时保存较短的尾部匹配：
 
 ```console
-cargo run --release -- --pattern XXXXXX --save-shorter 1 --output ./keys --oneshot
+./opencl_vanity_gpg --pattern XXXXXX --save-shorter 1 --output ./keys --oneshot
 ```
 
 此例搜索末尾 6 位相同的指纹，同时将末尾 5 位相同的结果保存到 `./keys`。`--oneshot` 只在命中原始 6 位目标后退出，并保存当前批次中的所有匹配。主密钥和子密钥模式均支持此参数。
