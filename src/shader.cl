@@ -1,4 +1,4 @@
-#define ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+#define ROTL(x, n) rotate((uint)(x), (uint)(n))
 
 #define __INJECTS__
 #ifdef __INJECTS__
@@ -35,9 +35,10 @@ __kernel void vanity_sha1(__constant uint *hashdata, __global uint *result,
 
         #pragma unroll
         for (uint chunk = 0; chunk < CHUNK; chunk++) {
-            uint w[80];
+            // SHA-1 only needs the previous 16 schedule words. Expanding them
+            // alongside the rounds avoids keeping all 80 words live at once.
+            uint w[16];
             for (int i = 0; i < 16; i++) w[i] = data[chunk * 16 + i];
-            for (int i = 16; i < 80; i++) w[i] = ROTL(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
 
             uint a = h[0];
             uint b = h[1];
@@ -50,6 +51,10 @@ __kernel void vanity_sha1(__constant uint *hashdata, __global uint *result,
 
             #pragma unroll
             for (int i = 0; i < 80; i++) {
+                if (i >= 16) {
+                    w[i & 15] = ROTL(w[(i - 3) & 15] ^ w[(i - 8) & 15] ^
+                                     w[(i - 14) & 15] ^ w[i & 15], 1);
+                }
                 if (i < 20) {
                     f = d ^ (b & (c ^ d));
                     k = 0x5A827999;
@@ -63,7 +68,7 @@ __kernel void vanity_sha1(__constant uint *hashdata, __global uint *result,
                     f = b ^ c ^ d;
                     k = 0xCA62C1D6;
                 }
-                t = ROTL(a, 5) + f + e + k + w[i];
+                t = ROTL(a, 5) + f + e + k + w[i & 15];
                 e = d;
                 d = c;
                 c = ROTL(b, 30);

@@ -191,4 +191,46 @@ mod tests {
         assert_eq!(actual.len(), 1);
         assert!(actual[0] < 128);
     }
+
+    #[test]
+    #[ignore = "requires an OpenCL device"]
+    fn matches_full_cpu_sha1_across_blocks_and_timestamp_boundaries() {
+        // Include one-block inputs, padding boundaries, and RSA-sized inputs.
+        for length in [51, 56, 119, 120, 196, 532] {
+            for future in [false, true] {
+                let base = if future { u32::MAX - 256 } else { 256 };
+                let mut raw: Vec<u8> = (0..length)
+                    .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+                    .collect();
+                raw[4..8].copy_from_slice(&base.to_be_bytes());
+                let data = manually_prepare_sha1(raw.clone());
+                // Match every bit of all five words, including offsets that
+                // require multiple iterations of the 64-work-item test kernel.
+                let mut expected = Vec::new();
+                let filters: Vec<String> = [0, 1, 63, 64, 255, 256]
+                    .into_iter()
+                    .map(|offset| {
+                        let timestamp = if future { base + offset } else { base - offset };
+                        expected.push(timestamp);
+                        raw[4..8].copy_from_slice(&timestamp.to_be_bytes());
+                        let hash = HashAlgorithm::SHA1.digest(&raw).unwrap();
+                        let words: Vec<String> = hash
+                            .chunks_exact(4)
+                            .enumerate()
+                            .map(|(i, bytes)| {
+                                let word = u32::from_be_bytes(bytes.try_into().unwrap());
+                                format!("h[{i}] == 0x{word:08X}u")
+                            })
+                            .collect();
+                        format!("({})", words.join(" && "))
+                    })
+                    .collect();
+                let search = gpu(&filters.join(" || "), data.len() / 16, future, true, 16);
+                let mut actual = search.search(&data, 257).unwrap();
+                actual.sort_unstable();
+                expected.sort_unstable();
+                assert_eq!(actual, expected, "length={length}, future={future}");
+            }
+        }
+    }
 }
